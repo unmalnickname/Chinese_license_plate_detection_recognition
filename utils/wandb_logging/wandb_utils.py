@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 import yaml
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.append(str(Path(__file__).parent.parent.parent))  # add utils/ to path
 from utils.datasets import LoadImagesAndLabels
@@ -226,11 +227,11 @@ class WandbLogger():
             self.val_table_map[data[3]] = data[0]
 
     def create_dataset_table(self, dataset, class_to_id, name='dataset'):
-        # TODO: Explore multiprocessing to slpit this loop parallely| This is essential for speeding up the the logging
         artifact = wandb.Artifact(name=name, type="dataset")
         img_files = tqdm([dataset.path]) if isinstance(dataset.path, str) and Path(dataset.path).is_dir() else None
         img_files = tqdm(dataset.img_files) if not img_files else img_files
-        for img_file in img_files:
+
+        def add_file(img_file):
             if Path(img_file).is_dir():
                 artifact.add_dir(img_file, name='data/images')
                 labels_path = 'labels'.join(dataset.path.rsplit('images', 1))
@@ -238,8 +239,11 @@ class WandbLogger():
             else:
                 artifact.add_file(img_file, name='data/images/' + Path(img_file).name)
                 label_file = Path(img2label_paths([img_file])[0])
-                artifact.add_file(str(label_file),
-                                  name='data/labels/' + label_file.name) if label_file.exists() else None
+                if label_file.exists():
+                    artifact.add_file(str(label_file), name='data/labels/' + label_file.name)
+
+        with ThreadPoolExecutor() as ex:
+            list(ex.map(add_file, img_files))
         table = wandb.Table(columns=["id", "train_image", "Classes", "name"])
         class_set = wandb.Classes([{'id': id, 'name': name} for id, name in class_to_id.items()])
         for si, (img, labels, paths, shapes) in enumerate(tqdm(dataset)):
